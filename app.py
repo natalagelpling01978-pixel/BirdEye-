@@ -1,65 +1,24 @@
-# ============================================================
-# app.py — Веб-интерфейс для распознавания птиц
-# ============================================================
-
-import gradio as gr
+from flask import Flask, request, render_template_string
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
 import os
 
-# --- 1. Настройки устройства ---
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"🔍 Используется устройство: {device}")
+app = Flask(__name__)
 
-# --- 2. Путь к модели (локально в Space) ---
-MODEL_PATH = "bird_model_russia.pth"
-NUM_CLASSES = 20
+# Путь к модели (должен быть правильным)
+MODEL_PATH = '/home/Natalia8/mysite/bird_model_russia.pth'
 
-# --- 3. Загрузка модели ---
-print("🖥️ Загрузка модели...")
+# Загрузка модели
+device = torch.device("cpu")
 model = models.resnet18(pretrained=False)
 num_ftrs = model.fc.in_features
-model.fc = nn.Linear(num_ftrs, NUM_CLASSES)
-
-# Проверяем, есть ли файл модели локально
-if os.path.exists(MODEL_PATH):
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-    print("✅ Модель загружена из локального файла")
-else:
-    print("❌ Файл модели не найден! Загрузите bird_model_russia.pth в ту же папку")
-
-model = model.to(device)
+model.fc = nn.Linear(num_ftrs, 20)
+model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.eval()
 
-# --- 4. Русские названия классов ---
-class_names = [
-    'Кряква',          # 0: Anas_platyrhynchos
-    'Серая цапля',     # 1: Ardea_cinerea
-    'Озёрная чайка',   # 2: Chroicocephalus_ridibundus
-    'Сизый голубь',    # 3: Columba_livia
-    'Серая ворона',    # 4: Corvus_corone_cornix
-    'Грач',            # 5: Corvus_frugilegus
-    'Лебедь-шипун',    # 6: Cygnus_olor
-    'Зяблик',          # 7: Fringilla_coelebs
-    'Лысуха',          # 8: Fulica_atra
-    'Хохотунья',       # 9: Larus_cachinnans
-    'Тихоокеанская чайка', # 10: Larus_schistisagus
-    'Белая трясогузка', # 11: Motacilla_alba
-    'Большая синица',  # 12: Parus_major
-    'Домовый воробей', # 13: Passer_domesticus
-    'Полевой воробей', # 14: Passer_montanus
-    'Большой баклан',  # 15: Phalacrocorax_carbo
-    'Сорока',          # 16: Pica_pica
-    'Обыкновенный скворец', # 17: Sturnus_vulgaris
-    'Чёрный дрозд',    # 18: Turdus_merula
-    'Рябинник'         # 19: Turdus_pilaris
-]
-
-# --- 5. Преобразования для фото ---
-from torchvision import transforms
-
+# Преобразования
 transform = transforms.Compose([
     transforms.Resize(256),
     transforms.CenterCrop(224),
@@ -67,40 +26,60 @@ transform = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-# --- 6. Функция предсказания ---
-def predict_image(image):
-    """Принимает изображение, возвращает предсказание и уверенность"""
-    # Преобразуем изображение
-    image_tensor = transform(image).unsqueeze(0).to(device)
+# Список классов (правильный порядок из обучения)
+class_names = [
+    'Кряква', 'Серая цапля', 'Озёрная чайка', 'Сизый голубь', 'Серая ворона',
+    'Грач', 'Лебедь-шипун', 'Зяблик', 'Лысуха', 'Хохотунья',
+    'Тихоокеанская чайка', 'Белая трясогузка', 'Большая синица', 'Домовый воробей',
+    'Полевой воробей', 'Большой баклан', 'Сорока', 'Обыкновенный скворец',
+    'Чёрный дрозд', 'Рябинник'
+]
 
-    # Предсказание
-    with torch.no_grad():
-        outputs = model(image_tensor)
-        probabilities = torch.nn.functional.softmax(outputs, dim=1)[0]
-
-    # Топ-3 результата
-    top_probs, top_indices = torch.topk(probabilities, 3)
-    top_probs = top_probs.cpu().numpy()
-    top_indices = top_indices.cpu().numpy()
-
-    # Формируем результат для Gradio
-    result = {class_names[idx]: float(prob) for idx, prob in zip(top_indices, top_probs)}
-    return result
-
-# --- 7. Создание интерфейса ---
-title = "🐦 BirdEye: Распознавание птиц России"
-description = """
-Загрузите фотографию птицы, и модель определит её вид.
-Распознаёт **20 видов** птиц, обитающих на территории России.
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BirdEye</title>
+    <style>
+        body { font-family: Arial; max-width: 800px; margin: auto; padding: 20px; text-align: center; }
+        .result { margin-top: 20px; padding: 15px; background: #e8f5e9; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <h1>🐦 BirdEye</h1>
+    <p>Загрузите фото птицы</p>
+    <form method="post" enctype="multipart/form-data">
+        <input type="file" name="file" accept="image/*">
+        <button type="submit">Определить</button>
+    </form>
+    {% if result %}
+    <div class="result">
+        <h2>Результат: {{ result }}</h2>
+        <p>Уверенность: {{ confidence }}%</p>
+    </div>
+    {% endif %}
+</body>
+</html>
 """
 
-demo = gr.Interface(
-    fn=predict_image,
-    inputs=gr.Image(type="pil", label="Загрузите фото птицы"),
-    outputs=gr.Label(num_top_classes=3, label="Результаты распознавания"),
-    title=title,
-    description=description,
-)
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    result = None
+    confidence = None
+    if request.method == 'POST':
+        if 'file' in request.files:
+            file = request.files['file']
+            if file.filename:
+                img = Image.open(file.stream).convert('RGB')
+                img_tensor = transform(img).unsqueeze(0)
+                with torch.no_grad():
+                    outputs = model(img_tensor)
+                    probs = torch.nn.functional.softmax(outputs[0], dim=0)
+                    pred_idx = torch.argmax(probs).item()
+                    confidence = round(probs[pred_idx].item() * 100, 2)
+                    result = class_names[pred_idx]
+    return render_template_string(HTML_TEMPLATE, result=result, confidence=confidence)
 
-# --- 8. Запуск ---
-demo.launch()
+# Это условие нужно для локального запуска. На Render'е его не выполнят, так как используют Gunicorn[citation:7].
+if __name__ == '__main__':
+    app.run()
