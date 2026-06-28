@@ -1,5 +1,6 @@
-torch
-torchvision
-gradio
-Pillow
+flask==3.0.3
+gunicorn==21.2.0
+torch==2.5.0
+torchvision==0.20.0
+Pillow==10.1.0
 numpy
